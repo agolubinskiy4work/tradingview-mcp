@@ -2,6 +2,11 @@
 
 68 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
 
+## Language Rule
+
+- Respond in Russian by default for all normal requests, TradingView workflows, skills, agents, reports, and summaries.
+- Use another language only when the user explicitly asks for it, quotes text that must be preserved as-is, or the requested output format requires a specific language.
+
 ## Decision Tree — Which Tool When
 
 ### User Trading Advisor

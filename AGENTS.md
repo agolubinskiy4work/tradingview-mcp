@@ -13,3 +13,4 @@ This project is configured for OpenCode. The canonical workflow rules remain in 
 - Keep Claude-compatible source files in `skills/` and `agents/` unless intentionally migrating them.
 - When changing a skill or agent, update the matching `.opencode/` copy as well.
 - For TradingView workflows, follow the decision tree in `CLAUDE.md` and the relevant skill instructions.
+- Default response language is Russian unless the user explicitly requests another language; this applies to normal requests, skills, agents, reports, and summaries.
