@@ -4,6 +4,30 @@
 
 ## Decision Tree — Which Tool When
 
+### User Trading Advisor
+
+When the user asks for market direction, EURUSD intraday analysis, setup validation, entry advice, or whether there is a trade, use the `trading-advisor` workflow and apply `strategies/my-trading-playbook.md` before responding. The user's model is higher-timeframe context first, 4H zone/range second, and 15m execution confirmation last. If the setup does not satisfy the playbook, say no trade and state what is missing.
+
+### Entry Alert Commands
+
+When the user says `entry alert short set`, `entry alert long set`, `entry alert both set`, asks to create an entry alert, or asks to configure `TV Entry Finder` / `Playbook Entry Finder`, use the `entry-alert` workflow. Find the indicator on the current chart, set its direction input, keep it active, and create an alert using the indicator condition `Any playbook entry` when possible.
+
+### Analyze Situation Command
+
+When the user says `analyze situation`, `analyze current situation`, `проанализируй ситуацию`, asks what is happening now, asks whether there was a test, or asks whether to wait for entry, use the `analyze-situation` workflow. Analyze the current selected TradingView asset through `strategies/my-trading-playbook.md`, classify the setup status, and give a practical recommendation such as wait for test, testing now, wait for 15m confirmation, no entry, valid setup, missed/too late, or invalidated.
+
+### Other Skill Workflows
+
+Use `chart-analysis` when the user asks for generic chart review, technical analysis, screenshots, annotations, support/resistance marking, indicator setup, or analysis that is not specifically the user's playbook workflow.
+
+Use `pine-develop` when the user asks to create, edit, debug, compile, save, or iterate on a Pine Script indicator, strategy, or library. Always compile after changes and do not claim Pine work is done without a clean compile.
+
+Use `strategy-report` when the user asks to review strategy tester results, backtest performance, trades, equity curve, win rate, profit factor, drawdown, or wants recommendations after running a Pine strategy.
+
+Use `replay-practice` when the user asks to practice, backtest manually, use replay mode, step through bars, simulate trades, or review a replay trading session.
+
+Use `multi-symbol-scan` when the user asks to scan several symbols, compare instruments, screen a watchlist, find setups across multiple assets, or batch screenshots/data across symbols or timeframes.
+
 ### "What's on my chart right now?"
 1. `chart_get_state` → symbol, timeframe, chart type, list of all indicators with entity IDs
 2. `data_get_study_values` → current numeric values from all visible indicators (RSI, MACD, BBands, EMAs, etc.)
