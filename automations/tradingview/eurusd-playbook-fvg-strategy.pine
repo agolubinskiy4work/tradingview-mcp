@@ -1,0 +1,335 @@
+//@version=6
+strategy("EURUSD Playbook FVG Strategy", overlay=true, initial_capital=10000, currency=currency.USD, pyramiding=0, commission_type=strategy.commission.percent, commission_value=0.0, slippage=1, default_qty_type=strategy.fixed, default_qty_value=10000, margin_long=1, margin_short=1, max_boxes_count=50, max_labels_count=500, calc_on_every_tick=true)
+
+groupGeneral = "General"
+rr = input.float(2.0, "Risk Reward", minval=0.5, step=0.1, group=groupGeneral)
+tradeDirection = input.string("Long Only", "Trade Direction", options=["Both", "Long Only", "Short Only"], group=groupGeneral)
+useNoEntryAfterHour = input.bool(true, "Use No New Entries After Hour", group=groupGeneral)
+noEntryAfterHour = input.int(22, "No New Entries After Hour", minval=0, maxval=23, group=groupGeneral)
+entryTimezone = input.string("Europe/Warsaw", "Entry Timezone", group=groupGeneral)
+require15m = input.bool(true, "Trade Only On 15m Chart", group=groupGeneral)
+backtestStart = input.time(timestamp("2024-01-01T00:00:00"), "Backtest Start", group=groupGeneral)
+backtestEnd = input.time(timestamp("2099-12-31T23:59:00"), "Backtest End", group=groupGeneral)
+
+groupFilters = "Filters"
+useStrictConfirmation = input.bool(false, "Strict Confirmation: BOS + FVG/iFVG", group=groupFilters)
+useHtfBias = input.bool(false, "Use 4H EMA Bias Filter", group=groupFilters)
+htfFastEmaLen = input.int(50, "4H Fast EMA", minval=1, group=groupFilters)
+htfSlowEmaLen = input.int(200, "4H Slow EMA", minval=2, group=groupFilters)
+useSessionFilter = input.bool(true, "Use Session Filter", group=groupFilters)
+sessionStartHour = input.int(0, "Session Start Hour", minval=0, maxval=23, group=groupFilters)
+sessionEndHour = input.int(22, "Session End Hour", minval=0, maxval=23, group=groupFilters)
+useFtaFilter = input.bool(false, "Avoid Entries Into Nearby FTA", group=groupFilters)
+ftaLookback = input.int(96, "FTA Lookback Bars", minval=10, maxval=500, group=groupFilters)
+minFtaR = input.float(1.2, "Minimum Space To FTA In R", minval=0.1, step=0.1, group=groupFilters)
+
+groupConfirm = "15m Confirmation"
+allowBos = input.bool(true, "Allow BOS", group=groupConfirm)
+allowNewFvg = input.bool(true, "Allow New 15m FVG", group=groupConfirm)
+allowIfvg = input.bool(true, "Allow iFVG", group=groupConfirm)
+swingLen = input.int(2, "BOS Swing Length", minval=1, maxval=10, group=groupConfirm)
+
+groupRisk = "Risk"
+riskPerTradePct = input.float(1.0, "Risk % Per Trade", minval=0.1, maxval=10.0, step=0.1, group=groupRisk)
+stopLookback = input.int(15, "Swing Stop Lookback", minval=2, maxval=100, group=groupRisk)
+minStopPips = input.float(0.0, "Fallback If Stop Closer Than Pips", minval=0.0, step=0.1, group=groupRisk)
+stopBufferPips = input.float(0.5, "Stop Buffer Pips", minval=0.0, step=0.1, group=groupRisk)
+useBreakEven = input.bool(false, "Move Stop To Breakeven", group=groupRisk)
+breakEvenAtR = input.float(1.0, "Breakeven Trigger R", minval=0.1, step=0.1, group=groupRisk)
+
+groupProp = "Prop Firm Guard"
+usePropGuard = input.bool(true, "Use Prop Firm Guard", group=groupProp)
+dailyDdLimitPct = input.float(5.0, "Daily DD Limit %", minval=0.5, maxval=20.0, step=0.1, group=groupProp)
+totalDdLimitPct = input.float(10.0, "Total DD Limit %", minval=1.0, maxval=50.0, step=0.1, group=groupProp)
+dailyLockBufferPct = input.float(4.5, "Daily Lock Buffer %", minval=0.1, maxval=20.0, step=0.1, group=groupProp)
+totalLockBufferPct = input.float(9.0, "Total Lock Buffer %", minval=0.1, maxval=50.0, step=0.1, group=groupProp)
+useDynamicRisk = input.bool(true, "Reduce Risk During Drawdown", group=groupProp)
+ddLevel1Pct = input.float(3.0, "DD Level 1 %", minval=0.1, maxval=20.0, step=0.1, group=groupProp)
+riskAtLevel1Pct = input.float(0.5, "Risk At DD Level 1 %", minval=0.1, maxval=10.0, step=0.1, group=groupProp)
+ddLevel2Pct = input.float(6.0, "DD Level 2 %", minval=0.1, maxval=20.0, step=0.1, group=groupProp)
+riskAtLevel2Pct = input.float(0.25, "Risk At DD Level 2 %", minval=0.1, maxval=10.0, step=0.1, group=groupProp)
+closeOnLimitBreach = input.bool(false, "Close Position On Limit Breach", group=groupProp)
+
+groupVisual = "Visuals"
+showZones = input.bool(true, "Show Active 4H FVG Zones", group=groupVisual)
+showSignals = input.bool(true, "Show Test/Confirmation Markers", group=groupVisual)
+showStatsTable = input.bool(true, "Show Strategy Stats Table", group=groupVisual)
+
+pip = syminfo.mintick * 10.0
+buffer = stopBufferPips * pip
+minStopDistance = minStopPips * pip
+isEurUsd = str.contains(syminfo.ticker, "EURUSD")
+is15m = timeframe.isminutes and timeframe.multiplier == 15
+canUseTimeframe = not require15m or is15m
+entryHour = hour(time, entryTimezone)
+canOpenByTime = not useNoEntryAfterHour or entryHour < noEntryAfterHour
+inSession = not useSessionFilter or (entryHour >= sessionStartHour and entryHour < sessionEndHour)
+inBacktestWindow = time >= backtestStart and time <= backtestEnd
+allowLongDirection = tradeDirection == "Both" or tradeDirection == "Long Only"
+allowShortDirection = tradeDirection == "Both" or tradeDirection == "Short Only"
+
+f_htfFvg() =>
+    bull = low > high[2]
+    bullLo = bull ? high[2] : na
+    bullHi = bull ? low : na
+    bear = high < low[2]
+    bearLo = bear ? high : na
+    bearHi = bear ? low[2] : na
+    [bull, bullLo, bullHi, bear, bearLo, bearHi]
+
+[h4BullFvg, h4BullLow, h4BullHigh, h4BearFvg, h4BearLow, h4BearHigh] = request.security(syminfo.tickerid, "240", f_htfFvg(), barmerge.gaps_off, barmerge.lookahead_off)
+h4Close = request.security(syminfo.tickerid, "240", close, barmerge.gaps_off, barmerge.lookahead_off)
+h4FastEma = request.security(syminfo.tickerid, "240", ta.ema(close, htfFastEmaLen), barmerge.gaps_off, barmerge.lookahead_off)
+h4SlowEma = request.security(syminfo.tickerid, "240", ta.ema(close, htfSlowEmaLen), barmerge.gaps_off, barmerge.lookahead_off)
+h4BullBias = not useHtfBias or (h4Close > h4FastEma and h4FastEma > h4SlowEma)
+h4BearBias = not useHtfBias or (h4Close < h4FastEma and h4FastEma < h4SlowEma)
+
+var float activeBullLow = na
+var float activeBullHigh = na
+var float activeBearLow = na
+var float activeBearHigh = na
+var bool bullZoneTested = false
+var bool bearZoneTested = false
+
+if h4BullFvg and not na(h4BullLow) and not na(h4BullHigh)
+    activeBullLow := h4BullLow
+    activeBullHigh := h4BullHigh
+    bullZoneTested := false
+
+if h4BearFvg and not na(h4BearLow) and not na(h4BearHigh)
+    activeBearLow := h4BearLow
+    activeBearHigh := h4BearHigh
+    bearZoneTested := false
+
+bullZoneTouched = not na(activeBullLow) and low <= activeBullHigh and high >= activeBullLow
+bearZoneTouched = not na(activeBearLow) and high >= activeBearLow and low <= activeBearHigh
+
+if bullZoneTouched
+    bullZoneTested := true
+
+if bearZoneTouched
+    bearZoneTested := true
+
+newBullFvg15 = low > high[2]
+newBullFvgLow15 = high[2]
+newBullFvgHigh15 = low
+newBearFvg15 = high < low[2]
+newBearFvgLow15 = high
+newBearFvgHigh15 = low[2]
+
+var float lastBullFvgLow15 = na
+var float lastBullFvgHigh15 = na
+var float lastBearFvgLow15 = na
+var float lastBearFvgHigh15 = na
+
+if newBullFvg15
+    lastBullFvgLow15 := newBullFvgLow15
+    lastBullFvgHigh15 := newBullFvgHigh15
+
+if newBearFvg15
+    lastBearFvgLow15 := newBearFvgLow15
+    lastBearFvgHigh15 := newBearFvgHigh15
+
+pivotHigh = ta.pivothigh(high, swingLen, swingLen)
+pivotLow = ta.pivotlow(low, swingLen, swingLen)
+
+var float lastSwingHigh = na
+var float lastSwingLow = na
+
+if not na(pivotHigh)
+    lastSwingHigh := pivotHigh
+
+if not na(pivotLow)
+    lastSwingLow := pivotLow
+
+bosUp = not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
+bosDown = not na(lastSwingLow) and close < lastSwingLow and close[1] >= lastSwingLow
+ifvgUp = not na(lastBearFvgHigh15) and close > lastBearFvgHigh15 and close[1] <= lastBearFvgHigh15
+ifvgDown = not na(lastBullFvgLow15) and close < lastBullFvgLow15 and close[1] >= lastBullFvgLow15
+
+longDisplacement = (allowNewFvg and newBullFvg15) or (allowIfvg and ifvgUp)
+shortDisplacement = (allowNewFvg and newBearFvg15) or (allowIfvg and ifvgDown)
+longConfirmation = useStrictConfirmation ? ((not allowBos or bosUp) and longDisplacement) : ((allowBos and bosUp) or longDisplacement)
+shortConfirmation = useStrictConfirmation ? ((not allowBos or bosDown) and shortDisplacement) : ((allowBos and bosDown) or shortDisplacement)
+
+longFta = ta.highest(high, ftaLookback)
+shortFta = ta.lowest(low, ftaLookback)
+longFtaSpace = longFta - close
+shortFtaSpace = close - shortFta
+
+var float dayEquityPeak = na
+var float maxDailyDrawdownCash = 0.0
+var float maxDailyDrawdownPct = 0.0
+var float totalEquityPeak = na
+var float maxTotalDrawdownCash = 0.0
+var float maxTotalDrawdownPct = 0.0
+var bool dailyTradingLocked = false
+var bool totalTradingLocked = false
+
+newDay = ta.change(time("D")) != 0
+if newDay or na(dayEquityPeak)
+    dayEquityPeak := strategy.equity
+    dailyTradingLocked := false
+else
+    dayEquityPeak := math.max(dayEquityPeak, strategy.equity)
+
+totalEquityPeak := na(totalEquityPeak) ? strategy.equity : math.max(totalEquityPeak, strategy.equity)
+currentDailyDrawdownCash = math.max(dayEquityPeak - strategy.equity, 0.0)
+currentDailyDrawdownPct = dayEquityPeak > 0 ? currentDailyDrawdownCash / dayEquityPeak * 100.0 : 0.0
+maxDailyDrawdownCash := math.max(maxDailyDrawdownCash, currentDailyDrawdownCash)
+maxDailyDrawdownPct := math.max(maxDailyDrawdownPct, currentDailyDrawdownPct)
+currentTotalDrawdownCash = math.max(totalEquityPeak - strategy.equity, 0.0)
+currentTotalDrawdownPct = totalEquityPeak > 0 ? currentTotalDrawdownCash / totalEquityPeak * 100.0 : 0.0
+maxTotalDrawdownCash := math.max(maxTotalDrawdownCash, currentTotalDrawdownCash)
+maxTotalDrawdownPct := math.max(maxTotalDrawdownPct, currentTotalDrawdownPct)
+dailyTradingLocked := usePropGuard and currentDailyDrawdownPct >= dailyLockBufferPct ? true : dailyTradingLocked
+totalTradingLocked := usePropGuard and currentTotalDrawdownPct >= totalLockBufferPct ? true : totalTradingLocked
+propTradingAllowed = not usePropGuard or (not dailyTradingLocked and not totalTradingLocked and currentDailyDrawdownPct < dailyDdLimitPct and currentTotalDrawdownPct < totalDdLimitPct)
+riskPctAdjusted = usePropGuard and useDynamicRisk and currentTotalDrawdownPct >= ddLevel2Pct ? riskAtLevel2Pct : usePropGuard and useDynamicRisk and currentTotalDrawdownPct >= ddLevel1Pct ? riskAtLevel1Pct : riskPerTradePct
+
+longReadyBase = isEurUsd and canUseTimeframe and inBacktestWindow and canOpenByTime and inSession and propTradingAllowed and allowLongDirection and h4BullBias and bullZoneTested and longConfirmation and strategy.position_size == 0
+shortReadyBase = isEurUsd and canUseTimeframe and inBacktestWindow and canOpenByTime and inSession and propTradingAllowed and allowShortDirection and h4BearBias and bearZoneTested and shortConfirmation and strategy.position_size == 0
+
+longSwingStop = ta.lowest(low, stopLookback)
+shortSwingStop = ta.highest(high, stopLookback)
+
+longZoneStop = not na(activeBullLow) ? activeBullLow : longSwingStop
+shortZoneStop = not na(activeBearHigh) ? activeBearHigh : shortSwingStop
+
+longStopBase = close - longSwingStop < minStopDistance ? longZoneStop : longSwingStop
+shortStopBase = shortSwingStop - close < minStopDistance ? shortZoneStop : shortSwingStop
+
+longStop = longStopBase - buffer
+shortStop = shortStopBase + buffer
+longRisk = close - longStop
+shortRisk = shortStop - close
+longTarget = close + longRisk * rr
+shortTarget = close - shortRisk * rr
+riskCash = strategy.equity * riskPctAdjusted / 100.0
+pointValue = syminfo.pointvalue > 0 ? syminfo.pointvalue : 1.0
+longQty = longRisk > syminfo.mintick ? math.floor(riskCash / (longRisk * pointValue)) : na
+shortQty = shortRisk > syminfo.mintick ? math.floor(riskCash / (shortRisk * pointValue)) : na
+longHasFtaSpace = not useFtaFilter or (longFtaSpace > longRisk * minFtaR)
+shortHasFtaSpace = not useFtaFilter or (shortFtaSpace > shortRisk * minFtaR)
+longReady = longReadyBase and longHasFtaSpace
+shortReady = shortReadyBase and shortHasFtaSpace
+
+var float activeLongStop = na
+var float activeLongTarget = na
+var float activeLongRisk = na
+var float activeShortStop = na
+var float activeShortTarget = na
+var float activeShortRisk = na
+
+if longReady and longRisk > syminfo.mintick and not na(longQty) and longQty > 0
+    strategy.entry("Long", strategy.long, qty=longQty)
+    activeLongStop := longStop
+    activeLongTarget := longTarget
+    activeLongRisk := longRisk
+    strategy.exit("Long TP/SL", "Long", stop=activeLongStop, limit=activeLongTarget)
+    bullZoneTested := false
+
+if shortReady and shortRisk > syminfo.mintick and not na(shortQty) and shortQty > 0
+    strategy.entry("Short", strategy.short, qty=shortQty)
+    activeShortStop := shortStop
+    activeShortTarget := shortTarget
+    activeShortRisk := shortRisk
+    strategy.exit("Short TP/SL", "Short", stop=activeShortStop, limit=activeShortTarget)
+    bearZoneTested := false
+
+if strategy.position_size > 0 and not na(activeLongStop) and not na(activeLongTarget)
+    if useBreakEven and not na(activeLongRisk) and high >= strategy.position_avg_price + activeLongRisk * breakEvenAtR
+        activeLongStop := math.max(activeLongStop, strategy.position_avg_price)
+    strategy.exit("Long TP/SL", "Long", stop=activeLongStop, limit=activeLongTarget)
+
+if strategy.position_size < 0 and not na(activeShortStop) and not na(activeShortTarget)
+    if useBreakEven and not na(activeShortRisk) and low <= strategy.position_avg_price - activeShortRisk * breakEvenAtR
+        activeShortStop := math.min(activeShortStop, strategy.position_avg_price)
+    strategy.exit("Short TP/SL", "Short", stop=activeShortStop, limit=activeShortTarget)
+
+if usePropGuard and closeOnLimitBreach and strategy.position_size != 0 and (currentDailyDrawdownPct >= dailyDdLimitPct or currentTotalDrawdownPct >= totalDdLimitPct)
+    strategy.close_all("Prop limit breach")
+
+if strategy.position_size == 0 and not longReady and not shortReady
+    activeLongStop := na
+    activeLongTarget := na
+    activeLongRisk := na
+    activeShortStop := na
+    activeShortTarget := na
+    activeShortRisk := na
+
+var box bullBox = na
+var box bearBox = na
+var table statsTable = table.new(position.top_right, 2, 14, border_width=1)
+
+if showZones and barstate.islast
+    if not na(bullBox)
+        box.delete(bullBox)
+    if not na(bearBox)
+        box.delete(bearBox)
+    if not na(activeBullLow) and not na(activeBullHigh)
+        bullBox := box.new(bar_index - 150, activeBullHigh, bar_index + 50, activeBullLow, bgcolor=color.new(color.green, 88), border_color=color.new(color.green, 45))
+    if not na(activeBearLow) and not na(activeBearHigh)
+        bearBox := box.new(bar_index - 150, activeBearHigh, bar_index + 50, activeBearLow, bgcolor=color.new(color.red, 88), border_color=color.new(color.red, 45))
+
+plotshape(showSignals and bullZoneTouched, "4H Bull FVG Test", shape.circle, location.belowbar, color.new(color.green, 0), size=size.tiny, text="4H test")
+plotshape(showSignals and bearZoneTouched, "4H Bear FVG Test", shape.circle, location.abovebar, color.new(color.red, 0), size=size.tiny, text="4H test")
+plotshape(showSignals and bosUp, "BOS Up", shape.triangleup, location.belowbar, color.new(color.lime, 0), size=size.tiny, text="BOS")
+plotshape(showSignals and bosDown, "BOS Down", shape.triangledown, location.abovebar, color.new(color.maroon, 0), size=size.tiny, text="BOS")
+plotshape(showSignals and ifvgUp, "iFVG Up", shape.labelup, location.belowbar, color.new(color.teal, 0), size=size.tiny, text="iFVG")
+plotshape(showSignals and ifvgDown, "iFVG Down", shape.labeldown, location.abovebar, color.new(color.orange, 0), size=size.tiny, text="iFVG")
+
+plot(strategy.position_size > 0 ? activeLongStop : na, "Long Stop", color=color.red, style=plot.style_linebr)
+plot(strategy.position_size > 0 ? activeLongTarget : na, "Long Target", color=color.green, style=plot.style_linebr)
+plot(strategy.position_size < 0 ? activeShortStop : na, "Short Stop", color=color.red, style=plot.style_linebr)
+plot(strategy.position_size < 0 ? activeShortTarget : na, "Short Target", color=color.green, style=plot.style_linebr)
+
+if showStatsTable and barstate.islast
+    int currentLossStreak = 0
+    int maxLossStreak = 0
+    int currentWinStreak = 0
+    int maxWinStreak = 0
+    for tradeNo = 0 to strategy.closedtrades - 1
+        tradeProfit = strategy.closedtrades.profit(tradeNo)
+        if tradeProfit < 0
+            currentLossStreak += 1
+            currentWinStreak := 0
+            maxLossStreak := math.max(maxLossStreak, currentLossStreak)
+        else if tradeProfit > 0
+            currentWinStreak += 1
+            currentLossStreak := 0
+            maxWinStreak := math.max(maxWinStreak, currentWinStreak)
+    table.cell(statsTable, 0, 0, "Metric", text_color=color.white, bgcolor=color.new(color.gray, 20))
+    table.cell(statsTable, 1, 0, "Value", text_color=color.white, bgcolor=color.new(color.gray, 20))
+    table.cell(statsTable, 0, 1, "Max losing streak")
+    table.cell(statsTable, 1, 1, str.tostring(maxLossStreak))
+    table.cell(statsTable, 0, 2, "Max winning streak")
+    table.cell(statsTable, 1, 2, str.tostring(maxWinStreak))
+    table.cell(statsTable, 0, 3, "Closed trades")
+    table.cell(statsTable, 1, 3, str.tostring(strategy.closedtrades))
+    table.cell(statsTable, 0, 4, "Max daily DD")
+    table.cell(statsTable, 1, 4, str.tostring(maxDailyDrawdownCash, "#.##") + " USD")
+    table.cell(statsTable, 0, 5, "Max daily DD %")
+    table.cell(statsTable, 1, 5, str.tostring(maxDailyDrawdownPct, "#.##") + "%")
+    table.cell(statsTable, 0, 6, "Current daily DD %")
+    table.cell(statsTable, 1, 6, str.tostring(currentDailyDrawdownPct, "#.##") + "%")
+    table.cell(statsTable, 0, 7, "Current total DD %")
+    table.cell(statsTable, 1, 7, str.tostring(currentTotalDrawdownPct, "#.##") + "%")
+    table.cell(statsTable, 0, 8, "Risk now %")
+    table.cell(statsTable, 1, 8, str.tostring(riskPctAdjusted, "#.##") + "%")
+    table.cell(statsTable, 0, 9, "Daily locked")
+    table.cell(statsTable, 1, 9, dailyTradingLocked ? "Yes" : "No")
+    table.cell(statsTable, 0, 10, "Total locked")
+    table.cell(statsTable, 1, 10, totalTradingLocked ? "Yes" : "No")
+    table.cell(statsTable, 0, 11, "Prop allowed")
+    table.cell(statsTable, 1, 11, propTradingAllowed ? "Yes" : "No")
+    table.cell(statsTable, 0, 12, "Max total DD")
+    table.cell(statsTable, 1, 12, str.tostring(maxTotalDrawdownCash, "#.##") + " USD")
+    table.cell(statsTable, 0, 13, "Max total DD %")
+    table.cell(statsTable, 1, 13, str.tostring(maxTotalDrawdownPct, "#.##") + "%")
+
+if barstate.islast and not isEurUsd
+    label.new(bar_index, high, "Strategy is restricted to EURUSD", style=label.style_label_down, textcolor=color.white, color=color.red)
+
+if barstate.islast and require15m and not is15m
+    label.new(bar_index, high, "Use this strategy on 15m timeframe", style=label.style_label_down, textcolor=color.white, color=color.orange)
