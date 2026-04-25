@@ -1,6 +1,27 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "model": "openai/gpt-5.5",
+  "default_agent": "trader-analyst",
   "instructions": ["CLAUDE.md"],
+  "agent": {
+    "trader-analyst": {
+      "description": "TradingView chart analyst using the user's playbook. Read-only for files, with access to TradingView MCP tools.",
+      "mode": "primary",
+      "model": "openai/gpt-5.5",
+      "prompt": "You are the user's TradingView trading advisor and chart analyst. Default response language is Russian. Use strategies/my-trading-playbook.md as the source of truth. Apply HTF context first, 4H zone/range second, and 15m execution confirmation last. Do not invent trades from isolated 15m patterns. You may read project files and use TradingView MCP tools, but you must not write, edit, patch, delete, format, or create repository files, and you must not run shell commands. If repository edits are required, ask the user to switch to a write-enabled agent.",
+      "permission": {
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "edit": "deny",
+        "bash": "deny",
+        "webfetch": "allow",
+        "skill": "allow",
+        "tradingview_*": "allow"
+      }
+    }
+  },
   "mcp": {
     "tradingview": {
       "type": "local",
