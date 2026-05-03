@@ -18,7 +18,8 @@
         "bash": "deny",
         "webfetch": "allow",
         "skill": "allow",
-        "tradingview_*": "allow"
+        "tradingview_*": "allow",
+        "qdrant_*": "allow"
       }
     }
   },
@@ -28,6 +29,31 @@
       "command": ["npm", "run", "start"],
       "enabled": true,
       "timeout": 10000
+    },
+    "qdrant": {
+      "type": "local",
+      "command": [
+        "podman",
+        "run",
+        "-i",
+        "--rm",
+        "--network",
+        "trading-rag_default",
+        "-e",
+        "QDRANT_URL=http://trading-rag-qdrant:6333",
+        "-e",
+        "COLLECTION_NAME=trading_transcripts",
+        "-e",
+        "EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2",
+        "-e",
+        "QDRANT_READ_ONLY=true",
+        "-e",
+        "QDRANT_SEARCH_LIMIT=10",
+        "mcp-server-qdrant",
+        "mcp-server-qdrant"
+      ],
+      "enabled": true,
+      "timeout": 30000
     }
   },
   "permission": {

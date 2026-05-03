@@ -7,6 +7,12 @@
 - Respond in Russian by default for all normal requests, TradingView workflows, skills, agents, reports, and summaries.
 - Use another language only when the user explicitly asks for it, quotes text that must be preserved as-is, or the requested output format requires a specific language.
 
+## Qdrant Memory
+
+- Use Qdrant MCP when previous trading transcripts, historical notes, or long-term context are needed.
+- Default collection: `trading_transcripts`.
+- Qdrant MCP is read-only. Do not store new data through it; use it only for retrieval/search.
+
 ## Decision Tree — Which Tool When
 
 ### User Trading Advisor
@@ -20,6 +26,10 @@ When the user says `entry alert short set`, `entry alert long set`, `entry alert
 ### Analyze Situation Command
 
 When the user says `analyze situation`, `analyze current situation`, `проанализируй ситуацию`, asks what is happening now, asks whether there was a test, or asks whether to wait for entry, use the `analyze-situation` workflow. Analyze the current selected TradingView asset through `strategies/my-trading-playbook.md`, classify the setup status, and give a practical recommendation such as wait for test, testing now, wait for 15m confirmation, no entry, valid setup, missed/too late, or invalidated.
+
+### Qdrant Notes Search
+
+When the user uses `#rag`, `#qdrant`, `#notes`, says `поищи в базе`, `найди в заметках`, `что говорилось про`, or asks to search previous transcripts/notes, use the `qdrant-search` workflow and call `qdrant_qdrant-find` before answering.
 
 ### Other Skill Workflows
 
